@@ -20,6 +20,9 @@ canvas{display:block}
 #fill{display:block;height:100%;width:0;background:linear-gradient(90deg,#ffb347,#ff5e62)}
 #spd{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(22px + env(safe-area-inset-bottom,0px));text-align:center;min-width:120px}
 #sp{font:800 44px ui-monospace,Menlo,monospace}
+#rb{height:5px;border-radius:3px;background:rgba(255,255,255,.18);overflow:hidden;margin:8px 0 4px}
+#rf{display:block;height:100%;width:0;background:#7ee08a}
+#gr{font:700 18px ui-monospace,Menlo,monospace;color:var(--acc)}
 #toast{position:absolute;left:50%;top:22%;transform:translateX(-50%);padding:10px 18px;border-radius:999px;background:var(--glass);border:1px solid rgba(255,255,255,.18);opacity:0;transition:opacity .3s;font-weight:600;text-align:center;max-width:80vw}
 #toast.on{opacity:1}
 #ov{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at center,rgba(20,24,50,.55),rgba(5,8,20,.92));padding:20px}
@@ -36,7 +39,7 @@ kbd{background:rgba(255,255,255,.14);border-radius:5px;padding:1px 7px;font-size
 <div id="hud">
  <div id="street" class="pill"><small>Now on</small><b id="st">Queens Plate Dr</b></div>
  <div id="stats" class="pill"><div id="tm">0:00.0</div><div id="rem"></div><div id="bar"><i id="fill"></i></div></div>
- <div id="spd" class="pill"><b id="sp">0</b><small>km/h</small></div>
+ <div id="spd" class="pill"><b id="sp">0</b><small>km/h</small><div id="rb"><i id="rf"></i></div><b id="gr">N</b></div>
  <div id="toast"></div>
 </div>
 <div id="tc"><div id="tl">◀</div><div id="tg">▲</div><div id="tb">■</div><div id="tr">▶</div></div>
@@ -143,15 +146,35 @@ const $=id=>document.getElementById(id),keys={};
 addEventListener('keydown',e=>{keys[e.code]=1;if(e.code==='KeyR')reset();if(['ArrowUp','ArrowDown','Space'].includes(e.code))e.preventDefault()});
 addEventListener('keyup',e=>keys[e.code]=0);
 const touch={};if('ontouchstart' in window){$('tc').style.display='flex';for(const[k,id]of[['l','tl'],['r','tr'],['g','tg'],['b','tb']]){const el=$(id);el.addEventListener('touchstart',e=>{e.preventDefault();touch[k]=1});el.addEventListener('touchend',()=>touch[k]=0);el.addEventListener('touchcancel',()=>touch[k]=0)}}
+// ---------- drivetrain (tune the feel here) ----------
+const CAR={mass:1450,wheelR:.33,final:5.0,gears:[3.8,2.3,1.6,1.2,.95,.82],idle:850,redline:6500,peakRpm:4400,peakTq:260,
+ shiftTime:.55,traction:7.5,brake:11,handbrake:7,dragK:.39,roll:.15,engBrake:.5};
+const G={gear:0,tgt:0,shiftT:0,rpm:CAR.idle,thr:0};
+function drive(v,up,dn,hb,dt){const C=CAR;G.thr+=((up?1:0)-G.thr)*Math.min(1,dt*(up?4:7));
+ if(G.shiftT>0){G.shiftT-=dt;if(G.shiftT<=0)G.gear=G.tgt}
+ const ratio=C.gears[G.gear]*C.final,wrpm=Math.max(0,v)*60/(2*Math.PI*C.wheelR)*ratio;
+ const eng=Math.max(C.idle,wrpm,G.gear===0?1500+G.thr*1800:0);let a=0;
+ if(dn&&v<.5){a=v>-6?-3.2:0}
+ else if(up&&G.shiftT<=0&&v>-.5){const tq=C.peakTq*Math.max(0,1-Math.pow((eng-C.peakRpm)/3800,2))*G.thr*(eng>=C.redline?0:1);a=Math.min(C.traction,tq*ratio*.9/C.wheelR/C.mass)}
+ if(v>.3){a-=C.dragK*v*v/C.mass+C.roll+(up?0:C.engBrake+wrpm*.0004);if(dn)a-=C.brake;if(hb)a-=C.handbrake}
+ else if(v<-.3){a+=C.roll+.002*v*v}
+ if(G.shiftT<=0){const upAt=2600+G.thr*3300;
+  if(G.gear<5&&up&&wrpm>upAt){G.tgt=G.gear+1;G.shiftT=C.shiftTime}
+  else if(G.gear>0&&wrpm<1500+G.thr*700){G.tgt=G.gear-1;G.shiftT=C.shiftTime*.6}
+  else if(G.gear>0&&G.thr>.9&&wrpm<2300&&v>3){G.tgt=G.gear-1;G.shiftT=C.shiftTime*.6}}
+ if(v<1&&!up){G.gear=0;G.tgt=0;G.shiftT=0}
+ const tr=G.shiftT>0?Math.max(0,v)*60/(2*Math.PI*C.wheelR)*C.gears[G.tgt]*C.final:eng;
+ G.rpm+=(Math.max(C.idle,tr)-G.rpm)*Math.min(1,dt*8);
+ let nv=v+a*dt;if(Math.abs(nv)<.15&&!up&&!dn)nv=0;return nv}
 let P,speed,idx,t0,run=false,hits,near,hitCD,toastT,lastSt,steer,shake,toastCD=0;
-function reset(){const a=at(10,2);P={x:a.x,z:a.z,h:a.h};speed=0;idx=2;steer=0;lastSt=''}
+function reset(){G.gear=G.tgt=0;G.shiftT=0;G.thr=0;G.rpm=CAR.idle;const a=at(10,2);P={x:a.x,z:a.z,h:a.h};speed=0;idx=2;steer=0;lastSt=''}
 function start(){reset();hits=0;near=0;hitCD=0;t0=performance.now();run=true;shake=0;$('ov').style.display='none';traffic.forEach(t=>t.nr=0)}
 function toast(s){if(toastCD>0)return;const el=$('toast');el.textContent=s;el.classList.add('on');toastCD=3;clearTimeout(toastT);toastT=setTimeout(()=>el.classList.remove('on'),2600)}
 function fmt(ms){const s=ms/1000;return Math.floor(s/60)+':'+(s%60).toFixed(1).padStart(4,'0')}
-function menu(done,ms){$('card').innerHTML=(done?'<h1>You made it<span>.</span></h1><p>Woodbine to The International Centre in <b>'+fmt(ms)+'</b></p><p>'+hits+' collisions · '+near+' near-misses</p>'
+function menu(done,ms){$('card').innerHTML=(done==='crash'?'<h1>Crashed<span>.</span></h1><p>You made it <b>'+(idx*STEP/1000).toFixed(2)+' km</b> in '+fmt(ms)+'.</p><p>'+near+' near-misses before it went wrong.</p>':done?'<h1>You made it<span>.</span></h1><p>Woodbine to The International Centre in <b>'+fmt(ms)+'</b></p><p>'+hits+' collisions · '+near+' near-misses</p>'
  :'<h1>GTA <span>Rush</span></h1><p>Race across the real streets of northwest Toronto and Mississauga. Watch the turn signals. They mean nothing.</p>')
  +'<div class="route">Woodbine Casino → Queens Plate Dr → Rexdale Blvd → Derry Rd W → Airport Rd → The International Centre</div>'
- +'<p><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows · <kbd>Space</kbd> brake · <kbd>R</kbd> reset onto the road</p><button id="go">'+(done?'Drive again':'Start engine')+'</button>';
+ +'<p><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows · <kbd>Space</kbd> brake · <kbd>R</kbd> reset onto the road</p><button id="go">'+(done==='crash'?'Try again':done?'Drive again':'Start engine')+'</button>';
  $('ov').style.display='flex';$('go').onclick=start}
 menu(false);reset();
 
@@ -172,18 +195,16 @@ function frame(){requestAnimationFrame(frame);const dt=Math.min(clock.getDelta()
   steer+=(sx-steer)*Math.min(1,dt*7);
   const a=at(idx*STEP,0);let best=1e9,bi=idx;for(let i=Math.max(0,idx-25);i<=Math.min(N,idx+25);i++){const d=Math.hypot(sp[i].x-P.x,sp[i].z-P.z);if(d<best){best=d;bi=i}}idx=bi;
   const t=T[idx],lat=(P.x-sp[idx].x)*-t.z+(P.z-sp[idx].z)*t.x,off=Math.abs(lat)>8.2;
-  if(up)speed+=(speed<0?40:20)*dt*(1-speed/62);if(dn||keys.Space)speed-=(keys.Space?48:30)*dt;
-  speed-=speed*.06*dt+(speed>0?3:0)*dt*(!up&&!dn?1:0);if(off){speed-=speed*1.1*dt;if(speed>16)speed-=18*dt}
-  speed=Math.max(-8,speed);if(!up&&!dn&&Math.abs(speed)<1)speed=0;
+  speed=drive(speed,up,dn,keys.Space,dt);if(off){speed-=speed*1.1*dt;if(speed>16)speed-=18*dt}speed=Math.max(-8,speed);
   P.h-=steer*1.7*Math.min(1,Math.abs(speed)/9)/(1+Math.abs(speed)/38)*dt*Math.sign(speed||1);
   P.x+=Math.sin(P.h)*speed*dt;P.z+=Math.cos(P.h)*speed*dt;
   hitCD-=dt;
   for(const c of traffic){const dx=c.m.position.x-P.x,dz=c.m.position.z-P.z,d=Math.hypot(dx,dz);
-   if(d<2.7){P.x-=dx/d*(2.7-d)*.6;P.z-=dz/d*(2.7-d)*.6;if(hitCD<=0){hits++;hitCD=1.2;speed*=.45;shake=.6;toast(['Sorry, eh?','Nobody signalled that.','Classic GTA merge.'][hits%3])}}
+   if(d<2.7){P.x-=dx/d*(2.7-d)*.6;P.z-=dz/d*(2.7-d)*.6;if(run){hits++;speed=0;shake=1;run=false;const cms=performance.now()-t0;setTimeout(()=>menu('crash',cms),900)}}
    else if(d<5.2&&speed>20&&c.nr<=0&&hitCD<=0){near++;c.nr=2.5;toast('Near miss!')}c.nr-=dt}
   const i2=Math.min(N,idx),nm=NM[i2];if(nm!==lastSt){lastSt=nm;$('st').textContent=nm;const s=$('street');s.classList.remove('flash');void s.offsetWidth;s.classList.add('flash')}
-  const ms=performance.now()-t0;$('tm').textContent=fmt(ms);$('rem').textContent=((N-idx)*STEP/1000).toFixed(2)+' km to go';$('fill').style.width=(idx/N*100)+'%';$('sp').textContent=Math.round(Math.abs(speed)*3.6);
-  if(idx>=N-4){run=false;menu(true,ms)}}
+  const ms=performance.now()-t0;$('tm').textContent=fmt(ms);$('rem').textContent=((N-idx)*STEP/1000).toFixed(2)+' km to go';$('fill').style.width=(idx/N*100)+'%';$('sp').textContent=Math.round(Math.abs(speed)*3.6);$('gr').textContent=speed<-.5?'R':(G.shiftT>0?'D'+(G.gear+1)+' › D'+(G.tgt+1):(speed<.5&&!G.thr?'N':'D'+(G.gear+1)));$('rf').style.width=Math.min(100,G.rpm/70)+'%';$('rf').style.background=G.rpm>6000?'#ff5e62':'#7ee08a';
+  if(run&&idx>=N-4){run=false;menu(true,ms)}}
  me.position.set(P.x,0,P.z);me.rotation.y=P.h;me.rotation.z=-steer*Math.min(1,speed/30)*.04;
  const fx=Math.sin(P.h),fz=Math.cos(P.h);shake=Math.max(0,(shake||0)-dt*2);
  const tx=P.x-fx*(8.5+speed*.04),tz=P.z-fz*(8.5+speed*.04),k=Math.min(1,dt*5);
