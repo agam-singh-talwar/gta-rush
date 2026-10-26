@@ -23,6 +23,8 @@ canvas{display:block}
 #rb{height:5px;border-radius:3px;background:rgba(255,255,255,.18);overflow:hidden;margin:8px 0 4px}
 #rf{display:block;height:100%;width:0;background:#7ee08a}
 #gr{font:700 18px ui-monospace,Menlo,monospace;color:var(--acc)}
+#lim{position:absolute;left:16px;bottom:calc(22px + env(safe-area-inset-bottom,0px));width:60px;height:60px;border-radius:50%;background:#fff;color:#111;border:6px solid #d62828;display:none;align-items:center;justify-content:center;font:800 24px ui-monospace,Menlo,monospace}
+#lim.over{background:#ffb3b3}
 #toast{position:absolute;left:50%;top:22%;transform:translateX(-50%);padding:10px 18px;border-radius:999px;background:var(--glass);border:1px solid rgba(255,255,255,.18);opacity:0;transition:opacity .3s;font-weight:600;text-align:center;max-width:80vw}
 #toast.on{opacity:1}
 #ov{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at center,rgba(20,24,50,.55),rgba(5,8,20,.92));padding:20px}
@@ -40,6 +42,7 @@ kbd{background:rgba(255,255,255,.14);border-radius:5px;padding:1px 7px;font-size
  <div id="street" class="pill"><small>Now on</small><b id="st">Queens Plate Dr</b></div>
  <div id="stats" class="pill"><div id="tm">0:00.0</div><div id="rem"></div><div id="bar"><i id="fill"></i></div></div>
  <div id="spd" class="pill"><b id="sp">0</b><small>km/h</small><div id="rb"><i id="rf"></i></div><b id="gr">N</b></div>
+ <div id="lim"></div>
  <div id="toast"></div>
 </div>
 <div id="tc"><div id="tl">◀</div><div id="tg">▲</div><div id="tb">■</div><div id="tr">▶</div></div>
@@ -48,13 +51,15 @@ kbd{background:rgba(255,255,255,.14);border-radius:5px;padding:1px 7px;font-size
 <script>
 // ROUTE: Woodbine Casino to The International Centre. Street names are real.
 // Waypoints are hand-placed approximations; swap in OSM geometry here later (lat, lng, street name).
-const WP=[
+function main(DATA){
+const FALLBACK=[
 [43.7172,-79.6002,'Queens Plate Dr'],[43.7154,-79.6046,'Queens Plate Dr'],
 [43.7132,-79.6080,'Rexdale Blvd'],[43.7112,-79.6118,'Rexdale Blvd'],
 [43.7092,-79.6170,'Derry Rd W'],[43.7074,-79.6242,'Derry Rd W'],
 [43.7060,-79.6310,'Derry Rd W'],[43.7056,-79.6352,'Airport Rd'],
 [43.7078,-79.6350,'Airport Rd'],[43.7122,-79.6336,'Airport Rd'],
 [43.7164,-79.6320,'Airport Rd']];
+const WP=DATA?DATA.points.map((p,i)=>[p[0],p[1],DATA.names[i]||'']):FALLBACK;
 const lat0=WP[0][0],lng0=WP[0][1],kx=111320*Math.cos(lat0*Math.PI/180),kz=110540;
 const V3=THREE.Vector3;
 const W=WP.map(p=>new V3((p[1]-lng0)*kx,0,-(p[0]-lat0)*kz));
@@ -122,6 +127,29 @@ function sign(txt,sub,s,d){const c=document.createElement('canvas');c.width=512;
 sign('WOODBINE CASINO','555 Rexdale Blvd · START',30,-16);
 sign('THE INTERNATIONAL CENTRE','6900 Airport Rd · FINISH',N*STEP-30,-16);
 
+// ---------- OSM-driven props (speed limits, stop signs, traffic lights) ----------
+const LIM=new Array(N+1).fill(0),sigs=[];
+function pole(a,h){const p=new THREE.Mesh(new THREE.CylinderGeometry(.06,.06,h,6),new THREE.MeshStandardMaterial({color:0x555b66}));p.position.set(a.x,h/2,a.z);scene.add(p)}
+function ctex(w,h,fn){const c=document.createElement('canvas');c.width=w;c.height=h;fn(c.getContext('2d'));const t=new THREE.CanvasTexture(c);t.encoding=THREE.sRGBEncoding;return t}
+function board(tex,w,h,a,y){const m=new THREE.Mesh(new THREE.PlaneGeometry(w,h),new THREE.MeshBasicMaterial({map:tex,side:THREE.DoubleSide,transparent:true,alphaTest:.5}));m.position.set(a.x,y,a.z);m.rotation.y=a.h+Math.PI;scene.add(m)}
+function limSign(v,s){const a=at(s,9.4);pole(a,2.6);board(ctex(128,160,g=>{g.fillStyle='#fff';g.fillRect(0,0,128,160);g.strokeStyle='#111';g.lineWidth=5;g.strokeRect(3,3,122,154);g.fillStyle='#111';g.textAlign='center';
+ g.font='bold 20px system-ui,sans-serif';g.fillText('MAXIMUM',64,34);g.font='bold 64px system-ui,sans-serif';g.fillText(v,64,104);g.font='18px system-ui,sans-serif';g.fillText('km/h',64,136)}),1,1.25,a,2.9)}
+function stopSign(s){const a=at(s,9.2);pole(a,2.5);board(ctex(128,128,g=>{g.beginPath();for(let i=0;i<8;i++){const t=Math.PI/8+i*Math.PI/4;g[i?'lineTo':'moveTo'](64+62*Math.cos(t),64+62*Math.sin(t))}g.closePath();g.fillStyle='#c4161c';g.fill();g.lineWidth=5;g.strokeStyle='#fff';g.stroke();
+ g.fillStyle='#fff';g.font='bold 38px system-ui,sans-serif';g.textAlign='center';g.fillText('STOP',64,77)}),1.1,1.1,a,2.8)}
+function signal(s){const a=at(s,9.2);pole(a,5);const mats=[0xff2a2a,0xffc020,0x30e070].map(c=>new THREE.MeshBasicMaterial({color:c})),g=new THREE.Group();
+ g.add(new THREE.Mesh(new THREE.BoxGeometry(.5,1.5,.4),new THREE.MeshStandardMaterial({color:0x15171c})));
+ mats.forEach((m,i)=>{const l=new THREE.Mesh(new THREE.SphereGeometry(.16,10,8),m);l.position.set(0,.5-i*.5,.22);g.add(l)});
+ g.position.set(a.x,5.2,a.z);g.rotation.y=a.h+Math.PI;scene.add(g);sigs.push({m:mats,ph:Math.random()*16})}
+if(DATA){
+ const proj=(la,ln)=>({x:(ln-lng0)*kx,z:-(la-lat0)*kz});
+ const near=(x,z)=>{let b=1e18,k=0;for(let i=0;i<=N;i++){const d=(sp[i].x-x)**2+(sp[i].z-z)**2;if(d<b){b=d;k=i}}return k};
+ (DATA.limits||[]).forEach((v,j)=>{if(v){const p=proj(DATA.points[j][0],DATA.points[j][1]);LIM[near(p.x,p.z)]=v}});
+ let last=0;for(let i=0;i<=N;i++){if(LIM[i])last=LIM[i];else LIM[i]=last}
+ const first=LIM.find(v=>v)||0;for(let i=0;i<=N&&!LIM[i];i++)LIM[i]=first;
+ let pv=0;for(let i=0;i<=N;i++){if(LIM[i]!==pv){pv=LIM[i];if(pv)limSign(pv,Math.max(4,i*STEP-4))}}
+ const seen=[];(DATA.controls||[]).forEach(c=>{const p=proj(c.lat,c.lng),k=near(p.x,p.z);if(Math.hypot(sp[k].x-p.x,sp[k].z-p.z)>30||k<4)return;
+  if(seen.some(q=>q.t===c.type&&Math.abs(q.k-k)<6))return;seen.push({k,t:c.type});(c.type==='stop'?stopSign:signal)(Math.max(2,k*STEP-8))});
+}
 // ---------- cars ----------
 const glass=new THREE.MeshStandardMaterial({color:0x10141c,metalness:.9,roughness:.1});
 const orange=new THREE.MeshBasicMaterial({color:0xffa000}),red=new THREE.MeshBasicMaterial({color:0xff2030}),wht=new THREE.MeshBasicMaterial({color:0xfff4d0});
@@ -180,6 +208,7 @@ menu(false);reset();
 
 const clock=new THREE.Clock();
 function frame(){requestAnimationFrame(frame);const dt=Math.min(clock.getDelta(),.05);toastCD-=dt;
+ const tn=performance.now()/1000;for(const g of sigs){const ph=(tn+g.ph)%16;g.m[0].color.setHex(ph>=10?0xff2a2a:0x3a0a0a);g.m[1].color.setHex(ph>=8&&ph<10?0xffc020:0x3a2e08);g.m[2].color.setHex(ph<8?0x30e070:0x0a2a14)}
  // traffic
  for(const t of traffic){t.timer-=dt;
   if(t.dir>0){if(t.sig===0&&t.timer<=0){t.sig=1;t.fake=Math.random()<.6;t.td=Math.abs(t.d-2)<1?6:2;t.timer=1.4;
@@ -203,7 +232,7 @@ function frame(){requestAnimationFrame(frame);const dt=Math.min(clock.getDelta()
    if(d<2.7){P.x-=dx/d*(2.7-d)*.6;P.z-=dz/d*(2.7-d)*.6;if(run){hits++;speed=0;shake=1;run=false;const cms=performance.now()-t0;setTimeout(()=>menu('crash',cms),900)}}
    else if(d<5.2&&speed>20&&c.nr<=0&&hitCD<=0){near++;c.nr=2.5;toast('Near miss!')}c.nr-=dt}
   const i2=Math.min(N,idx),nm=NM[i2];if(nm!==lastSt){lastSt=nm;$('st').textContent=nm;const s=$('street');s.classList.remove('flash');void s.offsetWidth;s.classList.add('flash')}
-  const ms=performance.now()-t0;$('tm').textContent=fmt(ms);$('rem').textContent=((N-idx)*STEP/1000).toFixed(2)+' km to go';$('fill').style.width=(idx/N*100)+'%';$('sp').textContent=Math.round(Math.abs(speed)*3.6);$('gr').textContent=speed<-.5?'R':(G.shiftT>0?'D'+(G.gear+1)+' › D'+(G.tgt+1):(speed<.5&&!G.thr?'N':'D'+(G.gear+1)));$('rf').style.width=Math.min(100,G.rpm/70)+'%';$('rf').style.background=G.rpm>6000?'#ff5e62':'#7ee08a';
+  const ms=performance.now()-t0;$('tm').textContent=fmt(ms);$('rem').textContent=((N-idx)*STEP/1000).toFixed(2)+' km to go';$('fill').style.width=(idx/N*100)+'%';const lm=LIM[idx],lb=$('lim');if(lm){lb.style.display='flex';lb.textContent=lm;lb.classList.toggle('over',speed*3.6>lm+3)}else lb.style.display='none';$('sp').textContent=Math.round(Math.abs(speed)*3.6);$('gr').textContent=speed<-.5?'R':(G.shiftT>0?'D'+(G.gear+1)+' › D'+(G.tgt+1):(speed<.5&&!G.thr?'N':'D'+(G.gear+1)));$('rf').style.width=Math.min(100,G.rpm/70)+'%';$('rf').style.background=G.rpm>6000?'#ff5e62':'#7ee08a';
   if(run&&idx>=N-4){run=false;menu(true,ms)}}
  me.position.set(P.x,0,P.z);me.rotation.y=P.h;me.rotation.z=-steer*Math.min(1,speed/30)*.04;
  const fx=Math.sin(P.h),fz=Math.cos(P.h);shake=Math.max(0,(shake||0)-dt*2);
@@ -215,4 +244,6 @@ function frame(){requestAnimationFrame(frame);const dt=Math.min(clock.getDelta()
  R.render(scene,cam)}
 cam.position.set(P.x,4,P.z+10);frame();
 addEventListener('resize',()=>{R.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()});
+}
+fetch('route.json').then(r=>r.ok?r.json():null).catch(()=>null).then(d=>main(d&&d.points&&d.points.length>5?d:null));
 </script></body></html>
