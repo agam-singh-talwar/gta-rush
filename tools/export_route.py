@@ -6,11 +6,11 @@ Overpass (OpenStreetMap stop signs, traffic lights, speed limits).
 Run from anywhere:  python3 tools/export_route.py
 Data (c) OpenStreetMap contributors, ODbL.
 """
-import json, math, pathlib, time, urllib.parse, urllib.request
+import argparse, json, math, pathlib, sys, time, urllib.parse, urllib.request
 
-UA = {"User-Agent": "gta-rush/0.3 (personal game project)"}
-START = ("Great Canadian Casino Resort Toronto, 1133 Queens Plate Dr, Toronto", (43.7172, -79.6002))
-END = ("The International Centre, 6900 Airport Rd, Mississauga", (43.7164, -79.6320))
+UA = {"User-Agent": "gta-rush/0.3 (personal game project; github.com/agam-singh-talwar/gta-rush)", "Accept-Language": "en"}
+START_QUERIES = ["1133 Queens Plate Drive, Toronto, Ontario", "Great Canadian Casino Resort Toronto", "Woodbine Racetrack, Toronto"]
+END_QUERIES = ["6900 Airport Road, Mississauga, Ontario", "The International Centre, Mississauga", "International Centre, Airport Road, Mississauga"]
 OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"]
 OUT = pathlib.Path(__file__).resolve().parent.parent / "route.json"
 
@@ -27,17 +27,41 @@ def get(url, data=None, tries=3):
     raise RuntimeError("request failed: " + url[:80])
 
 
-def geocode(label, fallback):
-    try:
-        q = urllib.parse.urlencode({"q": label, "format": "json", "limit": 1})
-        r = get("https://nominatim.openstreetmap.org/search?" + q, tries=2)
-        time.sleep(1.1)
-        if r:
-            return float(r[0]["lat"]), float(r[0]["lon"])
-    except RuntimeError:
-        pass
-    print("  geocoding failed, using fallback coordinates for", label)
-    return fallback
+def geocode(queries):
+    """Try Nominatim, then Photon, for each query. Returns (lat, lng, matched name) or None."""
+    for q in queries:
+        try:
+            r = get("https://nominatim.openstreetmap.org/search?" +
+                    urllib.parse.urlencode({"q": q, "format": "json", "limit": 1, "countrycodes": "ca"}), tries=2)
+            time.sleep(1.1)
+            if r:
+                return float(r[0]["lat"]), float(r[0]["lon"]), r[0].get("display_name", q)
+        except RuntimeError:
+            pass
+        try:
+            r = get("https://photon.komoot.io/api/?" + urllib.parse.urlencode({"q": q, "limit": 1, "lat": 43.71, "lon": -79.62}), tries=2)
+            if r.get("features"):
+                f = r["features"][0]
+                lng, lat = f["geometry"]["coordinates"]
+                return lat, lng, f["properties"].get("name", q)
+        except RuntimeError:
+            pass
+        print(f"  no result for: {q}")
+    return None
+
+
+def resolve(label, override, queries):
+    if override:
+        lat, lng = (float(x) for x in override.split(","))
+        print(f"  {label}: using your coordinates {lat}, {lng}")
+        return lat, lng
+    r = geocode(queries)
+    if not r:
+        sys.exit(f"\nCould not find the {label} automatically.\n"
+                 f"Open openstreetmap.org, right-click the exact spot > 'Show address', then run e.g.\n"
+                 f"  python3 tools/export_route.py --{label} 43.7061,-79.6335\n")
+    print(f"  {label}: {r[2]}  ({r[0]:.5f}, {r[1]:.5f})")
+    return r[0], r[1]
 
 
 def meters(a, b):
@@ -111,14 +135,19 @@ def build(pts, names, elements):
 
 
 def main():
-    print("Geocoding...")
-    a, b = geocode(*START), geocode(*END)
+    ap = argparse.ArgumentParser(description="Export the Woodbine -> International Centre route to route.json")
+    ap.add_argument("--start", help="override start as lat,lng")
+    ap.add_argument("--end", help="override end as lat,lng")
+    args = ap.parse_args()
+    print("Finding start and end...")
+    a, b = resolve("start", args.start, START_QUERIES), resolve("end", args.end, END_QUERIES)
     print("Routing (OSRM)...")
     pts, names, dist = fetch_route(a, b)
+    if "airport" not in names[-1].lower():
+        print(f"  WARNING: route ends on '{names[-1]}', not Airport Rd. Check the end point (use --end lat,lng).")
     print("Fetching OpenStreetMap signs, signals, speed limits (Overpass)...")
     limits, controls = build(pts, names, fetch_osm(pts))
-    OUT.write_text(json.dumps({"start": {"name": START[0], "lat": a[0], "lng": a[1]},
-                               "end": {"name": END[0], "lat": b[0], "lng": b[1]},
+    OUT.write_text(json.dumps({"start": {"lat": a[0], "lng": a[1]}, "end": {"lat": b[0], "lng": b[1]},
                                "points": pts, "names": names, "limits": limits,
                                "controls": controls}, separators=(",", ":")))
     order = [n for i, n in enumerate(names) if i == 0 or n != names[i - 1]]
