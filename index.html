@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GTA Rush: Woodbine to The International Centre</title>
+<style>
+:root{--ink:#fff;--glass:rgba(12,16,32,.55);--acc:#ffb347;box-sizing:border-box}
+html,body{height:100%;margin:0;background:#0b1020;overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink)}
+canvas{display:block}
+#hud{position:fixed;inset:0;pointer-events:none;padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}
+.pill{background:var(--glass);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:10px 16px}
+#street{position:absolute;left:16px;top:calc(16px + env(safe-area-inset-top,0px))}
+#street small,#spd small{display:block;font-size:11px;letter-spacing:.14em;opacity:.65;text-transform:uppercase}
+#street b{font-size:22px;color:var(--acc)}
+#street.flash{animation:fl .9s}
+@keyframes fl{0%{transform:scale(1.12);background:rgba(255,179,71,.5)}100%{transform:none}}
+#stats{position:absolute;right:16px;top:calc(16px + env(safe-area-inset-top,0px));text-align:right;min-width:150px}
+#tm{font:700 24px ui-monospace,Menlo,monospace}
+#rem{font-size:12px;opacity:.75;margin:2px 0 8px}
+#bar{height:6px;border-radius:3px;background:rgba(255,255,255,.18);overflow:hidden}
+#fill{display:block;height:100%;width:0;background:linear-gradient(90deg,#ffb347,#ff5e62)}
+#spd{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(22px + env(safe-area-inset-bottom,0px));text-align:center;min-width:120px}
+#sp{font:800 44px ui-monospace,Menlo,monospace}
+#toast{position:absolute;left:50%;top:22%;transform:translateX(-50%);padding:10px 18px;border-radius:999px;background:var(--glass);border:1px solid rgba(255,255,255,.18);opacity:0;transition:opacity .3s;font-weight:600;text-align:center;max-width:80vw}
+#toast.on{opacity:1}
+#ov{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at center,rgba(20,24,50,.55),rgba(5,8,20,.92));padding:20px}
+.card{max-width:460px;text-align:center}
+.card h1{margin:0 0 6px;font-size:34px;letter-spacing:-.02em}
+.card h1 span{color:var(--acc)}
+.card p{opacity:.8;line-height:1.5;margin:8px 0}
+.route{font-size:13px;opacity:.9;margin:14px 0}
+button{font:700 16px inherit;font-family:inherit;border:0;border-radius:999px;padding:13px 30px;background:linear-gradient(90deg,#ffb347,#ff5e62);color:#1a1020;cursor:pointer;margin-top:10px}
+kbd{background:rgba(255,255,255,.14);border-radius:5px;padding:1px 7px;font-size:12px}
+#tc{position:fixed;inset:auto 0 0 0;display:none;justify-content:space-between;padding:0 14px calc(18px + env(safe-area-inset-bottom,0px))}
+#tc div{width:74px;height:74px;border-radius:50%;background:var(--glass);border:1px solid rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-size:26px;user-select:none;touch-action:none}
+</style></head><body>
+<div id="hud">
+ <div id="street" class="pill"><small>Now on</small><b id="st">Queens Plate Dr</b></div>
+ <div id="stats" class="pill"><div id="tm">0:00.0</div><div id="rem"></div><div id="bar"><i id="fill"></i></div></div>
+ <div id="spd" class="pill"><b id="sp">0</b><small>km/h</small></div>
+ <div id="toast"></div>
+</div>
+<div id="tc"><div id="tl">◀</div><div id="tg">▲</div><div id="tb">■</div><div id="tr">▶</div></div>
+<div id="ov"><div class="card" id="card"></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ROUTE: Woodbine Casino to The International Centre. Street names are real.
+// Waypoints are hand-placed approximations; swap in OSM geometry here later (lat, lng, street name).
+const WP=[
+[43.7172,-79.6002,'Queens Plate Dr'],[43.7154,-79.6046,'Queens Plate Dr'],
+[43.7132,-79.6080,'Rexdale Blvd'],[43.7112,-79.6118,'Rexdale Blvd'],
+[43.7092,-79.6170,'Derry Rd W'],[43.7074,-79.6242,'Derry Rd W'],
+[43.7060,-79.6310,'Derry Rd W'],[43.7056,-79.6352,'Airport Rd'],
+[43.7078,-79.6350,'Airport Rd'],[43.7122,-79.6336,'Airport Rd'],
+[43.7164,-79.6320,'Airport Rd']];
+const lat0=WP[0][0],lng0=WP[0][1],kx=111320*Math.cos(lat0*Math.PI/180),kz=110540;
+const V3=THREE.Vector3;
+const W=WP.map(p=>new V3((p[1]-lng0)*kx,0,-(p[0]-lat0)*kz));
+const curve=new THREE.CatmullRomCurve3(W,false,'centripetal');
+const STEP=4,L=curve.getLength(),N=Math.floor(L/STEP),sp=curve.getSpacedPoints(N);
+const T=[],NM=[];
+function segName(p){let b=1e9,n='';for(let i=0;i<W.length-1;i++){const a=W[i],c=W[i+1],dx=c.x-a.x,dz=c.z-a.z;let t=((p.x-a.x)*dx+(p.z-a.z)*dz)/(dx*dx+dz*dz);t=Math.max(0,Math.min(1,t));const d=Math.hypot(a.x+dx*t-p.x,a.z+dz*t-p.z);if(d<b){b=d;n=WP[i][2]}}return n}
+for(let i=0;i<=N;i++){const a=sp[Math.max(0,i-1)],c=sp[Math.min(N,i+1)];const v=new V3(c.x-a.x,0,c.z-a.z).normalize();T.push(v);NM.push(segName(sp[i]))}
+function at(s,d){s=Math.max(0,Math.min(N*STEP-.01,s));const i=Math.floor(s/STEP),f=s/STEP-i,a=sp[i],b=sp[i+1],t=T[i];
+ const x=a.x+(b.x-a.x)*f,z=a.z+(b.z-a.z)*f;return{x:x-t.z*d,z:z+t.x*d,h:Math.atan2(t.x,t.z)}}
+
+// ---------- scene ----------
+const R=new THREE.WebGLRenderer({antialias:true});R.setPixelRatio(Math.min(devicePixelRatio,2));R.setSize(innerWidth,innerHeight);
+R.shadowMap.enabled=true;R.toneMapping=THREE.ACESFilmicToneMapping;R.toneMappingExposure=1.05;R.outputEncoding=THREE.sRGBEncoding;
+document.body.prepend(R.domElement);
+const scene=new THREE.Scene(),cam=new THREE.PerspectiveCamera(62,innerWidth/innerHeight,.5,1400);
+(function(){const c=document.createElement('canvas');c.width=4;c.height=256;const g=c.getContext('2d'),gr=g.createLinearGradient(0,0,0,256);
+ gr.addColorStop(0,'#1d2a5c');gr.addColorStop(.45,'#8a4f8c');gr.addColorStop(.72,'#ff8a5c');gr.addColorStop(1,'#ffc47a');g.fillStyle=gr;g.fillRect(0,0,4,256);
+ const t=new THREE.CanvasTexture(c);t.encoding=THREE.sRGBEncoding;scene.background=t})();
+scene.fog=new THREE.Fog(0xe69a78,70,520);
+scene.add(new THREE.HemisphereLight(0xffc89a,0x2a2f4a,.9));
+const sun=new THREE.DirectionalLight(0xffa86a,2.1);sun.castShadow=true;sun.shadow.mapSize.set(1024,1024);
+Object.assign(sun.shadow.camera,{left:-45,right:45,top:45,bottom:-45,near:1,far:200});scene.add(sun,sun.target);
+
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(6000,6000),new THREE.MeshStandardMaterial({color:0x35452f,roughness:1}));
+ground.rotation.x=-Math.PI/2;ground.position.y=-.05;ground.receiveShadow=true;scene.add(ground);
+
+// road texture
+const rc=document.createElement('canvas');rc.width=256;rc.height=256;const rg=rc.getContext('2d');
+rg.fillStyle='#2b2d33';rg.fillRect(0,0,256,256);
+for(let i=0;i<2500;i++){rg.fillStyle='rgba(255,255,255,'+Math.random()*.05+')';rg.fillRect(Math.random()*256,Math.random()*256,2,2)}
+rg.fillStyle='#e8e8e8';rg.fillRect(8,0,4,256);rg.fillRect(244,0,4,256);
+rg.fillStyle='#f2c230';rg.fillRect(122,0,3,256);rg.fillRect(131,0,3,256);
+rg.fillStyle='#e8e8e8';for(let y=0;y<256;y+=64){rg.fillRect(62,y,3,36);rg.fillRect(191,y,3,36)}
+const rt=new THREE.CanvasTexture(rc);rt.wrapS=rt.wrapT=THREE.RepeatWrapping;rt.anisotropy=8;rt.encoding=THREE.sRGBEncoding;
+function ribbon(w,y,mat,vs){const pos=[],uv=[],idx=[];for(let i=0;i<=N;i++){const p=sp[i],t=T[i],rx=-t.z,rz=t.x;
+ pos.push(p.x-rx*w,y,p.z-rz*w,p.x+rx*w,y,p.z+rz*w);uv.push(0,i*STEP/vs,1,i*STEP/vs);if(i<N){const a=i*2;idx.push(a,a+1,a+2,a+1,a+3,a+2)}}
+ const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));g.setIndex(idx);g.computeVertexNormals();
+ const m=new THREE.Mesh(g,mat);m.receiveShadow=true;scene.add(m)}
+ribbon(11,.0,new THREE.MeshStandardMaterial({color:0x6b6e74,roughness:.95}),10);
+ribbon(8,.03,new THREE.MeshStandardMaterial({map:rt,roughness:.85}),16);
+
+// buildings, trees, lights
+function nearRoad(x,z,min){for(let i=0;i<=N;i+=1){const p=sp[i];if(Math.abs(p.x-x)<min&&Math.abs(p.z-z)<min&&Math.hypot(p.x-x,p.z-z)<min)return true}return false}
+const wc=document.createElement('canvas');wc.width=64;wc.height=128;const wg=wc.getContext('2d');wg.fillStyle='#fff';wg.fillRect(0,0,64,128);
+for(let y=6;y<124;y+=12)for(let x=6;x<60;x+=12){wg.fillStyle=Math.random()<.4?'#ffd98a':'#7a86a8';wg.fillRect(x,y,6,7)}
+const wt=new THREE.CanvasTexture(wc);wt.encoding=THREE.sRGBEncoding;
+const bl=[],tr=[],ls=[];let seed=7;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
+for(let i=2;i<N;i+=5){for(const sd of[-1,1]){if(rnd()<.35)continue;const d=sd*(18+rnd()*34),a=at(i*STEP,d);if(nearRoad(a.x,a.z,16))continue;
+ bl.push({x:a.x,z:a.z,w:10+rnd()*16,h:6+rnd()*(rnd()<.2?38:16),dp:10+rnd()*14,r:a.h,c:new THREE.Color().setHSL(.58+rnd()*.12,.12,.35+rnd()*.3)})}}
+for(let i=1;i<N;i+=3){for(const sd of[-1,1]){if(rnd()<.45)continue;const a=at(i*STEP,sd*(12.5+rnd()*5));if(nearRoad(a.x,a.z,10.5))continue;tr.push({x:a.x,z:a.z,s:.8+rnd()*.9})}}
+for(let i=3;i<N;i+=10)for(const sd of[-1,1])ls.push(at(i*STEP,sd*10));
+const bm=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshStandardMaterial({map:wt,roughness:.8,emissive:0x2a2010,emissiveMap:wt,emissiveIntensity:.5}),bl.length),m4=new THREE.Matrix4(),q=new THREE.Quaternion(),e=new THREE.Euler();
+bl.forEach((b,i)=>{q.setFromEuler(e.set(0,b.r,0));m4.compose(new V3(b.x,b.h/2,b.z),q,new V3(b.w,b.h,b.dp));bm.setMatrixAt(i,m4);bm.setColorAt(i,b.c)});bm.castShadow=bm.receiveShadow=true;scene.add(bm);
+const tm=new THREE.InstancedMesh(new THREE.ConeGeometry(2.2,7,7),new THREE.MeshStandardMaterial({color:0x2d5a3a,roughness:1}),tr.length);
+tr.forEach((t,i)=>{m4.compose(new V3(t.x,3.5*t.s,t.z),new THREE.Quaternion(),new V3(t.s,t.s,t.s));tm.setMatrixAt(i,m4)});tm.castShadow=true;scene.add(tm);
+const pm=new THREE.InstancedMesh(new THREE.CylinderGeometry(.1,.14,9,6),new THREE.MeshStandardMaterial({color:0x444a55}),ls.length),
+ hm=new THREE.InstancedMesh(new THREE.BoxGeometry(1.6,.25,.5),new THREE.MeshBasicMaterial({color:0xffe2a0}),ls.length);
+ls.forEach((l,i)=>{m4.compose(new V3(l.x,4.5,l.z),new THREE.Quaternion(),new V3(1,1,1));pm.setMatrixAt(i,m4);q.setFromEuler(e.set(0,l.h,0));m4.compose(new V3(l.x,9,l.z),q,new V3(1,1,1));hm.setMatrixAt(i,m4)});scene.add(pm,hm);
+
+function sign(txt,sub,s,d){const c=document.createElement('canvas');c.width=512;c.height=160;const g=c.getContext('2d');g.fillStyle='#10162e';g.fillRect(0,0,512,160);g.strokeStyle='#ffb347';g.lineWidth=6;g.strokeRect(5,5,502,150);
+ g.fillStyle='#fff';g.font='bold 46px system-ui,sans-serif';g.textAlign='center';g.fillText(txt,256,78);g.fillStyle='#ffb347';g.font='24px system-ui,sans-serif';g.fillText(sub,256,120);
+ const t=new THREE.CanvasTexture(c);t.encoding=THREE.sRGBEncoding;const a=at(s,d),m=new THREE.Mesh(new THREE.PlaneGeometry(14,4.4),new THREE.MeshBasicMaterial({map:t}));
+ m.position.set(a.x,8,a.z);m.rotation.y=a.h+Math.PI;scene.add(m);const p=new THREE.Mesh(new THREE.CylinderGeometry(.2,.2,8),new THREE.MeshStandardMaterial({color:0x333}));p.position.set(a.x,4,a.z);scene.add(p)}
+sign('WOODBINE CASINO','555 Rexdale Blvd · START',30,-16);
+sign('THE INTERNATIONAL CENTRE','6900 Airport Rd · FINISH',N*STEP-30,-16);
+
+// ---------- cars ----------
+const glass=new THREE.MeshStandardMaterial({color:0x10141c,metalness:.9,roughness:.1});
+const orange=new THREE.MeshBasicMaterial({color:0xffa000}),red=new THREE.MeshBasicMaterial({color:0xff2030}),wht=new THREE.MeshBasicMaterial({color:0xfff4d0});
+function makeCar(col){const g=new THREE.Group(),paint=new THREE.MeshStandardMaterial({color:col,metalness:.65,roughness:.3});
+ const b=new THREE.Mesh(new THREE.BoxGeometry(1.8,.62,4.3),paint);b.position.y=.62;const c=new THREE.Mesh(new THREE.BoxGeometry(1.52,.5,2.1),glass);c.position.set(0,1.15,-.25);
+ b.castShadow=c.castShadow=true;g.add(b,c);
+ const wg=new THREE.CylinderGeometry(.36,.36,.26,14),wm=new THREE.MeshStandardMaterial({color:0x111});
+ for(const x of[-.95,.95])for(const z of[-1.4,1.4]){const w=new THREE.Mesh(wg,wm);w.rotation.z=Math.PI/2;w.position.set(x,.36,z);g.add(w)}
+ const add=(mat,x,z,w=.4)=>{const m=new THREE.Mesh(new THREE.BoxGeometry(w,.16,.06),mat);m.position.set(x,.75,z);g.add(m);return m};
+ add(wht,.6,2.16);add(wht,-.6,2.16);add(red,.6,-2.16);add(red,-.6,-2.16);
+ g.userData.L=[add(orange,.84,2.16,.16),add(orange,.84,-2.16,.16)];g.userData.Rr=[add(orange,-.84,2.16,.16),add(orange,-.84,-2.16,.16)];
+ for(const m of[...g.userData.L,...g.userData.Rr])m.visible=false;return g}
+const me=makeCar(0x18c0ff);scene.add(me);
+const cols=[0xd9dde3,0xf4f4f4,0x25282d,0x7a1f2b,0x2c4f7c,0x9aa3ad,0xd9dde3,0xeeeeee];
+const traffic=[];
+for(let i=0;i<22;i++){const dir=i%4===3?-1:1,lanes=dir>0?[2,6]:[-2,-6],d=lanes[i%2];
+ const t={m:makeCar(cols[i%cols.length]),s:140+i*(L-260)/22+Math.random()*30,d,td:d,dir,v:12+Math.random()*9,timer:3+Math.random()*6,sig:0,fake:false,blink:0};
+ scene.add(t.m);traffic.push(t)}
+
+// ---------- game ----------
+const $=id=>document.getElementById(id),keys={};
+addEventListener('keydown',e=>{keys[e.code]=1;if(e.code==='KeyR')reset();if(['ArrowUp','ArrowDown','Space'].includes(e.code))e.preventDefault()});
+addEventListener('keyup',e=>keys[e.code]=0);
+const touch={};if('ontouchstart' in window){$('tc').style.display='flex';for(const[k,id]of[['l','tl'],['r','tr'],['g','tg'],['b','tb']]){const el=$(id);el.addEventListener('touchstart',e=>{e.preventDefault();touch[k]=1});el.addEventListener('touchend',()=>touch[k]=0);el.addEventListener('touchcancel',()=>touch[k]=0)}}
+let P,speed,idx,t0,run=false,hits,near,hitCD,toastT,lastSt,steer,shake,toastCD=0;
+function reset(){const a=at(10,2);P={x:a.x,z:a.z,h:a.h};speed=0;idx=2;steer=0;lastSt=''}
+function start(){reset();hits=0;near=0;hitCD=0;t0=performance.now();run=true;shake=0;$('ov').style.display='none';traffic.forEach(t=>t.nr=0)}
+function toast(s){if(toastCD>0)return;const el=$('toast');el.textContent=s;el.classList.add('on');toastCD=3;clearTimeout(toastT);toastT=setTimeout(()=>el.classList.remove('on'),2600)}
+function fmt(ms){const s=ms/1000;return Math.floor(s/60)+':'+(s%60).toFixed(1).padStart(4,'0')}
+function menu(done,ms){$('card').innerHTML=(done?'<h1>You made it<span>.</span></h1><p>Woodbine to The International Centre in <b>'+fmt(ms)+'</b></p><p>'+hits+' collisions · '+near+' near-misses</p>'
+ :'<h1>GTA <span>Rush</span></h1><p>Race across the real streets of northwest Toronto and Mississauga. Watch the turn signals. They mean nothing.</p>')
+ +'<div class="route">Woodbine Casino → Queens Plate Dr → Rexdale Blvd → Derry Rd W → Airport Rd → The International Centre</div>'
+ +'<p><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows · <kbd>Space</kbd> brake · <kbd>R</kbd> reset onto the road</p><button id="go">'+(done?'Drive again':'Start engine')+'</button>';
+ $('ov').style.display='flex';$('go').onclick=start}
+menu(false);reset();
+
+const clock=new THREE.Clock();
+function frame(){requestAnimationFrame(frame);const dt=Math.min(clock.getDelta(),.05);toastCD-=dt;
+ // traffic
+ for(const t of traffic){t.timer-=dt;
+  if(t.dir>0){if(t.sig===0&&t.timer<=0){t.sig=1;t.fake=Math.random()<.6;t.td=Math.abs(t.d-2)<1?6:2;t.timer=1.4;
+    const a=at(t.s,t.d);if(Math.hypot(a.x-P.x,a.z-P.z)<70&&t.fake)toast('Signals left. Turns right. Classic.')}
+   else if(t.sig===1&&t.timer<=0){t.sig=0;t.timer=4+Math.random()*7;t.fake=false}}
+  t.d+=(t.sig===1&&t.timer<.9||t.sig===0?t.td-t.d:0)*Math.min(1,dt*1.6);
+  t.s+=t.v*t.dir*dt;if(t.s>N*STEP-60)t.s=70;if(t.s<70)t.s=N*STEP-60;
+  const a=at(t.s,t.d);t.m.position.set(a.x,0,a.z);t.m.rotation.y=a.h+(t.dir<0?Math.PI:0)+((t.td-t.d)*-.05*(t.dir>0?1:0));
+  t.blink+=dt;const on=t.sig===1&&Math.floor(t.blink*4)%2===0,wantRight=t.td<t.d,showLeft=t.fake?wantRight:!wantRight;
+  for(const m of t.m.userData.L)m.visible=on&&showLeft;for(const m of t.m.userData.Rr)m.visible=on&&!showLeft}
+ if(run){
+  const up=keys.ArrowUp||keys.KeyW||touch.g,dn=keys.ArrowDown||keys.KeyS||touch.b,sx=((keys.ArrowRight||keys.KeyD||touch.r)?1:0)-((keys.ArrowLeft||keys.KeyA||touch.l)?1:0);
+  steer+=(sx-steer)*Math.min(1,dt*7);
+  const a=at(idx*STEP,0);let best=1e9,bi=idx;for(let i=Math.max(0,idx-25);i<=Math.min(N,idx+25);i++){const d=Math.hypot(sp[i].x-P.x,sp[i].z-P.z);if(d<best){best=d;bi=i}}idx=bi;
+  const t=T[idx],lat=(P.x-sp[idx].x)*-t.z+(P.z-sp[idx].z)*t.x,off=Math.abs(lat)>8.2;
+  if(up)speed+=(speed<0?40:20)*dt*(1-speed/62);if(dn||keys.Space)speed-=(keys.Space?48:30)*dt;
+  speed-=speed*.06*dt+(speed>0?3:0)*dt*(!up&&!dn?1:0);if(off){speed-=speed*1.1*dt;if(speed>16)speed-=18*dt}
+  speed=Math.max(-8,speed);if(!up&&!dn&&Math.abs(speed)<1)speed=0;
+  P.h-=steer*1.7*Math.min(1,Math.abs(speed)/9)/(1+Math.abs(speed)/38)*dt*Math.sign(speed||1);
+  P.x+=Math.sin(P.h)*speed*dt;P.z+=Math.cos(P.h)*speed*dt;
+  hitCD-=dt;
+  for(const c of traffic){const dx=c.m.position.x-P.x,dz=c.m.position.z-P.z,d=Math.hypot(dx,dz);
+   if(d<2.7){P.x-=dx/d*(2.7-d)*.6;P.z-=dz/d*(2.7-d)*.6;if(hitCD<=0){hits++;hitCD=1.2;speed*=.45;shake=.6;toast(['Sorry, eh?','Nobody signalled that.','Classic GTA merge.'][hits%3])}}
+   else if(d<5.2&&speed>20&&c.nr<=0&&hitCD<=0){near++;c.nr=2.5;toast('Near miss!')}c.nr-=dt}
+  const i2=Math.min(N,idx),nm=NM[i2];if(nm!==lastSt){lastSt=nm;$('st').textContent=nm;const s=$('street');s.classList.remove('flash');void s.offsetWidth;s.classList.add('flash')}
+  const ms=performance.now()-t0;$('tm').textContent=fmt(ms);$('rem').textContent=((N-idx)*STEP/1000).toFixed(2)+' km to go';$('fill').style.width=(idx/N*100)+'%';$('sp').textContent=Math.round(Math.abs(speed)*3.6);
+  if(idx>=N-4){run=false;menu(true,ms)}}
+ me.position.set(P.x,0,P.z);me.rotation.y=P.h;me.rotation.z=-steer*Math.min(1,speed/30)*.04;
+ const fx=Math.sin(P.h),fz=Math.cos(P.h);shake=Math.max(0,(shake||0)-dt*2);
+ const tx=P.x-fx*(8.5+speed*.04),tz=P.z-fz*(8.5+speed*.04),k=Math.min(1,dt*5);
+ cam.position.x+=(tx-cam.position.x)*k;cam.position.z+=(tz-cam.position.z)*k;cam.position.y+=((3.4+speed*.012)-cam.position.y)*k;
+ cam.position.x+=(Math.random()-.5)*shake;cam.position.y+=(Math.random()-.5)*shake*.6;
+ cam.lookAt(P.x+fx*7,1.4,P.z+fz*7);cam.fov+=((60+Math.min(speed,50)*.45)-cam.fov)*k;cam.updateProjectionMatrix();
+ sun.position.set(P.x-60,40,P.z-90);sun.target.position.set(P.x,0,P.z);
+ R.render(scene,cam)}
+cam.position.set(P.x,4,P.z+10);frame();
+addEventListener('resize',()=>{R.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()});
+</script></body></html>
